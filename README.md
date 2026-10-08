@@ -2,205 +2,181 @@
 
 Starter template for developing [LAREX Actions](https://github.com/OCR4all/LAREX) using the [larex-actions-sdk](https://github.com/OCR4all/larex-action-sdk).
 
+
+## Overview
+
 The template is intentionally minimal. Action-specific functionality should be added where indicated by `TEMPLATE` comments.
 
-For more information, read the [official documentation](https://docs.larex.kallimachos.de/actions/overview).
+For more information, read the [official LAREX documentation](https://docs.larex.kallimachos.de/actions/overview).
 
-## Project Structure
-```text
+
+## File Structure
+
+```bash
 ├─ src/larex_action/
-│  ├─ __init__.py
-│  ├─ config.py
-│  ├─ runner.py
-│  └─ worker.py
-├─ action.yml
-├─ compose.yml
-├─ template.env
+│  ├─ __init__.py  # Action entrypoint. Defines logger, parameter provider and endpoints
+│  ├─ config.py    # Environment and runtime config definitions
+│  ├─ runner.py    # Action communication, states, worker initialization
+│  └─ worker.py    # Actual action processing
+├─ action.yml      # Action definition
+├─ compose.yml     # Docker/Podman compose definition
+├─ template.env    # Environment template
 └─ ...
 ```
 
-### \_\_init\_\_.py
 
-This module is the entry point of the LAREX Action.
+## Template
 
-#### Parameter value providers
+### Pull data from LAREX
 
-The template includes an example for parameter value providers. Parameter value providers can be used when an action parameter has a dynamically generated set of possible values.
-For example, an action that uses models stored in `/models` could expose the available model files as parameter choices:
+Data can be bulled either by `ctx.download_bytes()` (recommended) or by `ctx.download_to_path()`.
 
-Provider example:
+Example:
 ```python
-from pathlib import Path
+# runner.py
+image = await ctx.download_bytes(page.images[0])
+xml = await ctx.download_bytes(page.xml[0])
+```
+
+
+### Push data to LAREX
+
+The template automatically initializes an empty `results` object for each processed page and sends the object at the end. To add data to the results, use either `results.add_file_bytes()`, `results.add_image_bytes()` or `results.add_xml_bytes()` to add bytes directly, or add files by path with `results.add_file_path()`, `results.add_image_path()` or `results.add_xml_path()`.
+
+Example:
+```python
+# runner.py
+results.add_xml_bytes(page_id=page.id, content=xml_bytes, file_name=f'{page.name}.xml')
+```
+
+
+### Setup worker
+
+Each worker is started in a separate process to prevent infinite running actions on worker crashes. Data between the action process and the worker process is transfered through a `multiprocessing.Pipe`. This is already implemented.
+
+To change the transfered data objects, change the two dataclasses `WorkerRequest` (data sent to the worker) and `WorkerSuccess` (data received from the worker on success).
+
+Example:
+```python
+# worker.py
+@dataclass
+class WorkerRequest:
+    image: bytes
+    xml: bytes
+    
+@dataclass
+class WorkerSuccess:
+    xml: bytes
+```
+
+Within the worker, libraries can be initialized before the processing loop. This is executed once per action run and can be used to e.g. load a model.
+
+Example:
+```python
+# worker.py
+def work(connection: Connection) -> None:
+    import numpy as np
+    from my_model import Model
+    m = Model(model)
+    ...
+```
+
+Within the empty try/catch, the actual action processing can be implemented. Received data is accessed via the `request` object (of type `WorkerRequest`) and sent back to the main process via `connection.send()`, which accepts a `WorkerSuccess` object.
+
+Example:
+```python
+# worker.py
+try:
+    image = cv2.imdecode(np.frombuffer(request.image, np.uint8), cv2.IMREAD_GRAYSCALE)
+    xml = do_something(image)            
+    connection.send(WorkerSuccess(xml))
+except ...
+```
+
+### Action parameters
+
+_Action parameters_ are custom values that can be manually set or changed in the LAREX frontend for each action run.
+
+First, they have to be defined in the action definition. See the [documentation](https://docs.larex.kallimachos.de/actions/yaml-reference#parameters) for further information.
+
+Example:
+```yml
+# action.yml
+parameters:
+  Model:  # this is the name displayed in the frontend
+    type: string
+    default: model-a
+```
+
+To pull the parameters inside the action, use `action_input.parameters.get()`.
+
+Example:
+```python
+# runner.py
+model = action_input.parameters.get('Model', None)
+```
+
+If you need to pass a parameter to the worker, you have to pass the value as a process argument:
+```python
+# runner.py
+process = context.Process(
+    target=work,
+    args=(child_connection, model, )  # this is the argument list
+)
+```
+
+Additionally, the worker function needs to accept such an argument, for example:
+```python
+# worker.py
+def work(connection: Connection, model: Path) -> None:
+    ...
+```
+
+### Define parameter value providers
+
+In some cases, you want to provide a dynamic list of possible parameters to the frontend (e.g. a list of available models). For this case, you can specify _parameter value providers_. 
+
+Example:
+```python
+# __init__.py
 from larex_actions import ParameterChoice
 
 def discover_models() -> list[ParameterChoice]:
     return [ParameterChoice(value=path.name, label=path.stem) for path in Path('/models').glob('*.pth')]
 ```
 
-The provider is then registered with the application:
+A _parameter value provider_ can then be registered in the app with:
 ```python
+# __init__.py
 app = create_larex_action_app(
-    ...,
+    ...
     parameter_value_providers={'models': discover_models}
 )
 ```
 
-### config.py
-
-This module contains the configuration for the action. Settings are loaded from environment variables using [Pydantic Settings](https://pydantic.dev/docs/validation/latest/concepts/pydantic_settings/) and are available throughout the application through the `env` object.
-
-Settings example:
-```python
-class Settings(BaseSettings):
-    ...
-    MODEL_PATH: str = '/models/default.pth' 
-    USE_GPU: bool = True 
-    MAX_BATCH_SIZE: PositiveInt = 1
-    ...
-```
-
-Add only configuration that is specific to the action. The LAREX and generic action settings already provided by the template should normally be left unchanged.
-
-
-### runner.py
-
-This module coordinates the execution of the LAREX Action. It connects the LAREX _ActionContext_ with the process-isolated worker defined in `worker.py`. It also handles cancellation, progress reporting, timeouts, worker lifecycle management, and concurrent action limits.
-
-#### Pass parameters to the action
-
-Example of a `Model` parameter:
-```python
-model = action_input.parameters.get('Model', None)
-```
-
-In most cases, the parameter needs to be passed to the worker, which is done by adding it to the parameter list:
-```python
-process = context.Process(
-    target=work,
-    args=(child_connection, model, )  # added here
-)
-```
-
-The `work` function in `worker.py` then has to accept such a parameter as well!
-
-which accepts parameters from the LAREX frontend. A parameter can be defined in the action definition:
-```yaml
+Last but not least, the provider has to be registered in the action definition:
+```yml
+# action.yml
 parameters:
   Model:
     type: string
-    description: Select a model
-    default: model.pth
+    default: model-a
     allowedValues:
       provider: models
 ```
 
-The full documentation can be found [here](https://docs.larex.kallimachos.de/actions/yaml-reference#parameters).
+### Add custom config variables
 
-#### Pull inputs from LAREX
+Next to the already defined and required variables in `template.env` and `config.py`, sometimes you want to add custom variables (e.g. file paths, fixed parameters, etc.). For this, just add the variable to the `Settings` class. The value can then be passed as an environment variable to the action or container. Required variables are further explained in the _Deploy_ section.
 
-This is where data required to process the current page should be retrieved from LAREX and sent to the worker.
+## Deploy
 
-Example if an image and a xml file is sent:
-```python
-image = await ctx.download_bytes(page.images[0])
-xml = await ctx.download_bytes(page.xml[0])
-connection.send(WorkerRequest(image, xml))
+### Environment
+
+Create a `.env` file from the template and populate its values:
+```bash
+cp template.env .env
 ```
-
-The corresponding fields should be added to `WorkerRequest` in `worker.py`. Keep LAREX-specific data retrieval in the runner. The worker should receive ordinary Python data through `WorkerRequest` rather than accessing the `ActionContext` itself.
-
-#### Handling worker results
-
-The worker returns either a `WorkerSuccess` or `WorkerFailure`. Depending on the result, the corresponding fields should be added to `WorkerSuccess`.
-
-For example, if `WorkerSuccess` contains an XML document:
-```python
-results.add_xml_bytes(
-    page_id=page.id, 
-    content=result.xml, 
-    file_name=f'{page.name}.xml'
-)
-```
-
-### worker.py
-
-This module contains the action-specific processing logic. It runs in a separate process from the FastAPI application and communicates with `runner.py` through a `multiprocessing.Pipe`.
-
-#### Define worker input
-
-`WorkerRequest` describes the data that the worker needs to process one page. For example:
-```python
-@dataclass
-class WorkerRequest: 
-    image: bytes 
-    xml: bytes
-```
-
-#### Define worker output
-`WorkerSuccess` describes the output produced when processing succeeds:
-```python
-@dataclass
-class WorkerSuccess: 
-    xml: bytes
-```
-
-#### Initialize worker dependencies
-
-The worker is started once per action. The template provides a dedicated location for imports and initialization. Expensive resources should generally be initialized here rather than for every page.
-
-For example:
-```python
-def work(connection: Connection, model_path: Path) -> None:
-    from my_model import Model
-    model = Model(model_path)
-```
-
-#### Processing pages
-
-The main action-specific implementation belongs here. The worker receives a `WorkerRequest`, processes it, and sends back a `WorkerSuccess`.
-
-For example:
-```python
-image = process_image(request.image)
-connection.send(WorkerSuccess(image=image))
-```
-
-#### Returning results
-
-Successful results should be returned using the `WorkerSuccess` dataclass:
-
-```python
-connection.send(WorkerSuccess(...))
-```
-
-### action.yml
-
-This file is a sample for the action definition in the frontend admin panel.
-Refer to the [official documentation](https://docs.larex.kallimachos.de/actions/yaml-reference) for further help.
-
-### compose.yml
-
-This file is the Docker/Podman compose file to run the action as a container. It pulls the configuration from a required `.env` file (a template can be found in `template.env`).
-
-#### Pass a GPU to the container
-
-Add this to the compose file:
-```yaml
-devices:
-  - nvidia.com/gpu=all
-security_opt:
-  - label=disable
-```
-
-#### Pass files or directories to the container
-
-For example, add this to the compose file:
-```yaml
-volumes:
-  - /storage/workspace/shared/project/models/sbbbin:/models
-```
-
-## Environment variables
 
 | **Variable**                     | **Default** | **Description**                                                                                                           |
 |----------------------------------|-------------|---------------------------------------------------------------------------------------------------------------------------|
@@ -213,3 +189,11 @@ volumes:
 | `ACTION_DEBUG`                   | `false`     | Enable action worker logging                                                                                              |
 | `ACTION_MAX_CONCURRENT_RUNS`     | `1`         | Maximum worker runs admitted concurrently in one processor instance. Increase only after measuring host/GPU memory.       |
 | `ACTION_PAGE_TIMEOUT`            | `None`      | Maximum processing time per page in seconds. If a page exceeds the timeout, the process is cancelled.                     |
+
+### Docker/Podman Compose (recommended)
+
+You might want to change the container name in `compose.yml` if you host multiple actions.
+
+```bash
+docker compose build && docker compose up -d
+```
