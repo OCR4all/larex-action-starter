@@ -200,29 +200,40 @@ cp template.env .env
 
 ### Docker/Podman Compose (Recommended)
 
-You may want to change the `name` and `container_name` in `compose.yml` if you host multiple actions.
+If you host multiple actions, consider changing `name` and `container_name` in `compose.yml` to avoid naming conflicts.
 
+Build and start the action:
 ```bash
 docker compose build && docker compose up -d
 ```
 
-#### Pass directories to the container
+#### Mount host directories
 
-Add a volume to the service:
+To make a host directory accessible inside the container, add a volume mount to the service in `compose.yml`:
+
 ```yml
 volumes:
   - /path/on/server:/path/in/container:Z
 ```
 
-The `:Z` suffix might be necessary if your server has SELinux installed.
+The `:Z` suffix applies a private SELinux label to the mounted content and may be required on SELinux-enabled systems. Omit it if it is not needed by your environment.
 
-#### Pass GPU(s) to the container
+#### Enable NVIDIA GPU access
 
+If the action requires an NVIDIA GPU, add the following to the service configuration:
 
-Add this to the compose file:
 ```yml
 devices:
   - nvidia.com/gpu=all
+```
+
+This configuration requires a compatible container runtime and NVIDIA CDI support to be configured on the host.
+
+Depending on your environment, you may also need the following setting:
+
+```yml
 security_opt:
   - label=disable
 ```
+
+Use this setting only if required by your container runtime and SELinux configuration.
