@@ -32,6 +32,7 @@ app = create_larex_action_app(
     handler=run,
     processor_id=env.LAREX_PROCESSOR_ID,
     dispatch_secret=env.LAREX_DISPATCH_HMAC_SECRET,
+    route_prefixes=env.LAREX_ROUTE_PREFIXES,
     allowed_callback_origins=env.LAREX_ALLOWED_CALLBACK_ORIGINS,
     # TEMPLATE: register parameter value providers here. Example:
     # parameter_value_providers={'models': discover_models}

@@ -1,3 +1,5 @@
+name: larex-action
+
 services:
   larex-action:
     container_name: larex-action

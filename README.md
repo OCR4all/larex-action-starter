@@ -200,8 +200,29 @@ cp template.env .env
 
 ### Docker/Podman Compose (Recommended)
 
-You may want to change the container name in `compose.yml` if you host multiple actions.
+You may want to change the `name` and `container_name` in `compose.yml` if you host multiple actions.
 
 ```bash
 docker compose build && docker compose up -d
+```
+
+#### Pass directories to the container
+
+Add a volume to the service:
+```yml
+volumes:
+  - /path/on/server:/path/in/container:Z
+```
+
+The `:Z` suffix might be necessary if your server has SELinux installed.
+
+#### Pass GPU(s) to the container
+
+
+Add this to the compose file:
+```yml
+devices:
+  - nvidia.com/gpu=all
+security_opt:
+  - label=disable
 ```
