@@ -90,6 +90,7 @@ async def _run(ctx: ActionContext) -> None:
     await ctx.heartbeat(status_message='Initialize action', raise_on_cancel=True)
     
     total = len(action_input.pages)
+    succeeded = 0
     logger.info(f'Starting worker for {total} pages(s)')
     
     # TEMPLATE: pull parameters here. Example:
@@ -139,6 +140,7 @@ async def _run(ctx: ActionContext) -> None:
                         message = f'[{i}/{total}] Action finished for {page.name}'
                         status = 'SUCCEEDED'
                         logger.debug(message)
+                        succeeded += 1
                     else:
                         raise RuntimeError(  # noqa: TRY004
                             f'Worker returned an unknown result type: {type(result).__name__}'
@@ -168,7 +170,7 @@ async def _run(ctx: ActionContext) -> None:
             await ctx.fail(message)
             return
         
-        message = f'Successfully processed {total} element(s)'
+        message = f'Successfully processed {succeeded}/{total} element(s)'
         logger.info(message)
         await ctx.complete(message=message)
         
