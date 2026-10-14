@@ -34,7 +34,7 @@ class WorkerFailure:
 
 # TEMPLATE: accept passes parameters. Example:
 # def worker(connection: Connection, model: Path) -> None:
-def work(connection: Connection) -> None:
+def worker(connection: Connection) -> None:
     """
     Process-isolated action worker.
     
@@ -73,7 +73,7 @@ def work(connection: Connection) -> None:
         except Exception as exc:
             logger.exception('Failed to process element')
             try:
-                connection.send(WorkerFailure(f'{type(exc).__name__}: {exc}'))
+                connection.send(WorkerFailure(f'{type(exc).__name__} {exc}'))
             except (BrokenPipeError, EOFError, OSError):
                 logger.warning('Could not send worker failure to parent')
                 break

@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from larex_actions.fastapi import create_larex_action_app
 
 from .config import env
-from .runner import run
+from .runner import runner
 
 
 def configure_logging() -> None:
@@ -29,7 +29,7 @@ def configure_logging() -> None:
 
 configure_logging()
 app = create_larex_action_app(
-    handler=run,
+    handler=runner,
     processor_id=env.LAREX_PROCESSOR_ID,
     dispatch_secret=env.LAREX_DISPATCH_HMAC_SECRET,
     route_prefixes=env.LAREX_ROUTE_PREFIXES,
@@ -42,13 +42,5 @@ app = create_larex_action_app(
 @app.get('/ready')
 async def readiness():
     if env.RUN_SEMAPHORE.locked():
-        return JSONResponse(
-            content={'status': 'busy'},
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE
-        )
-    return JSONResponse(
-        content={
-            'status': 'ready',
-            'capacity': env.ACTION_MAX_CONCURRENT_RUNS
-        }
-    )
+        return JSONResponse(content={'status': 'busy'}, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+    return JSONResponse(content={'status': 'ready', 'capacity': env.ACTION_MAX_CONCURRENT_RUNS})

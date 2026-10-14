@@ -10,7 +10,7 @@ from multiprocessing.context import SpawnProcess
 from larex_actions import ActionContext
 
 from .config import env
-from .worker import WorkerFailure, WorkerRequest, WorkerSuccess, work
+from .worker import WorkerFailure, WorkerRequest, WorkerSuccess, worker
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +22,19 @@ def _calculate_progress(page: int, total: int) -> int:
 async def _wait_for_worker(
     ctx: ActionContext,
     process: SpawnProcess,
-    connection: Connection,
+    connection: Connection
 ) -> WorkerSuccess | WorkerFailure:
     """
-    Wait for the result of the current page.
-    The timeout starts when this function is called, i.e. after the image has been downloaded and sent to the worker.
+    Wait for the worker to return a result for the current page.
+    Args:
+        ctx: The ActionContext provided by the SDK.
+        process: The worker process to monitor.
+        connection: The pipe connection used to receive the worker's result.
+    Raises:
+        TimeoutError: If the page timeout is reached.
+        RuntimeError: If the worker exits unexpectedly before returning a result.
+    Returns:
+        The worker's result, either a WorkerSuccess or WorkerFailure instance.
     """
     loop = asyncio.get_running_loop()
     if env.ACTION_PAGE_TIMEOUT is not None:
@@ -53,8 +61,10 @@ async def _wait_for_worker(
 
 async def _stop_worker(process: SpawnProcess, connection: Connection) -> None:
     """
-    Stop the worker gracefully.
-    If it does not exit within the grace period, terminate it.
+    Stop the worker gracefully. If it does not exit within the grace period, terminate it.
+    Args:
+        process: The worker process to stop.
+        connection: The pipe connection used to send data to the worker.
     """
     if not process.is_alive():
         await asyncio.to_thread(process.join)
@@ -77,13 +87,10 @@ async def _run(ctx: ActionContext) -> None:
     if not action_input.pages:
         await ctx.fail('Action input is empty')
         
-    await ctx.heartbeat(
-        status_message='Initialize action',
-        raise_on_cancel=True
-    )
+    await ctx.heartbeat(status_message='Initialize action', raise_on_cancel=True)
     
     total = len(action_input.pages)
-    logger.info(f'Start worker for {total} pages(s)')
+    logger.info(f'Starting worker for {total} pages(s)')
     
     # TEMPLATE: pull parameters here. Example:
     # model = action_input.parameters.get('Model', None)
@@ -92,10 +99,8 @@ async def _run(ctx: ActionContext) -> None:
     connection, child_connection = context.Pipe()
     
     # TEMPLATE: add custom parameters to the args tuple. Example: args=(child_connection, model)
-    process = context.Process(
-        target=work,
-        args=(child_connection, )
-    )
+    process = context.Process(target=worker, args=(child_connection, ))
+
     process.start()
     child_connection.close()
     
@@ -108,8 +113,8 @@ async def _run(ctx: ActionContext) -> None:
                 raise_on_cancel=True
             )
             
-            async with ctx.step(f'Run action for {page.name}'):
-                logger.debug(f'Run action for {page.name} ({i}/{total})')
+            async with ctx.step(f'[{i}/{total}] Processing page {page.name}'):
+                logger.debug(f'[{i}/{total}] Processing page {page.name}')
                 results = ctx.result_builder()
                 
                 try:
@@ -120,36 +125,41 @@ async def _run(ctx: ActionContext) -> None:
                     
                     result = await _wait_for_worker(ctx, process, connection)
                     if isinstance(result, WorkerFailure):
-                        message = f'Action failed for {page.name} ({i}/{total})'
+                        message = f'[{i}/{total}] Action failed for {page.name}: {result.error}'
+                        status = 'FAILED'
                         logger.error(message)
                     elif isinstance(result, WorkerSuccess):
                         # TEMPLATE: add action result to LAREX results. Example:
                         # results.add_xml_bytes(
                         #     page_id=page.id,
                         #     content=result.xml,
-                        #     file_name=f'{page.images[0].file_name or page.name or "page"}.xml'
+                        #     file_name=f'{page.name or "page"}.xml'
                         # )
                         
-                        message = f'Action finished for {i}/{total}'
+                        message = f'[{i}/{total}] Action finished for {page.name}'
+                        status = 'SUCCEEDED'
                         logger.debug(message)
                     else:
-                        raise RuntimeError(f'Worker returned an unknown result type: {type(result).__name__}')  # noqa: TRY004
+                        raise RuntimeError(  # noqa: TRY004
+                            f'Worker returned an unknown result type: {type(result).__name__}'
+                        )
                     
                 except asyncio.CancelledError:
                     raise
                 except TimeoutError:
-                    logger.error(f'Worker timed out after {env.ACTION_PAGE_TIMEOUT} seconds while processing {i}/{total}')
+                    logger.error(
+                        f'[{i}/{total}] Worker timed out after {env.ACTION_PAGE_TIMEOUT} '
+                        f'seconds while processing {page.name}'
+                    )
                     raise
                 except Exception as exc:
-                    message = f'Action failed for ({i}/{total}): {type(exc).__name__}: {exc}'
+                    message = f'[{i}/{total}] Action failed for {page.name}: {type(exc).__name__} {exc}'
+                    status = 'FAILED'
                     logger.exception(message)
                 
-                await ctx.submit_page_results(page.id, results, message)
+                await ctx.submit_page_results(page.id, results, message, page_status=status, reason=message)
                 
-            await ctx.heartbeat(
-                progress_percent=_calculate_progress(i, total), 
-                raise_on_cancel=True
-            )
+            await ctx.heartbeat(progress_percent=_calculate_progress(i, total), raise_on_cancel=True)
         
         await _stop_worker(process, connection)
         if process.exitcode != 0:
@@ -178,6 +188,6 @@ async def _run(ctx: ActionContext) -> None:
         connection.close()
 
 
-async def run(ctx: ActionContext) -> None:
+async def runner(ctx: ActionContext) -> None:
     async with env.RUN_SEMAPHORE:
         await _run(ctx)
