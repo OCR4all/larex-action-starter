@@ -1,8 +1,6 @@
-name: larex-action
-
 services:
-  larex-action:
-    container_name: larex-action
+  action:
+    container_name: larex-action-${NAME:?No name defined}
     build:
       context: ./
       dockerfile: Dockerfile
