@@ -5,7 +5,7 @@ import multiprocessing
 from multiprocessing.connection import Connection
 from multiprocessing.context import SpawnProcess
 
-from larex_actions import ActionContext
+from larex_actions import ActionCancelled, ActionContext
 
 from .config import env
 from .worker import WorkerRequest, WorkerResponse, WorkerStatus, worker
@@ -34,6 +34,22 @@ def _start_worker(*args: object) -> tuple[SpawnProcess, Connection]:
     return process, connection
 
 
+async def _check_cancelled(ctx: ActionContext) -> None:
+    """
+    Check if the action was cancelled from LAREX.
+    Args:
+        ctx: The ActionContext provided by the SDK.
+    Raises:
+        ActionCancelled: If the action was cancelled.
+    """
+    try:
+        await ctx.check_cancelled()
+    except ActionCancelled:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f'ctx.check_cancelled() raised an error: {exc}')
+
+
 async def _receive(ctx: ActionContext, process: SpawnProcess, connection: Connection, timeout: int | None) -> object:
     """
     Wait for the next message from the worker.
@@ -54,7 +70,7 @@ async def _receive(ctx: ActionContext, process: SpawnProcess, connection: Connec
  
     while True:
         if loop.time() >= next_cancel_check:
-            await ctx.check_cancelled()
+            await _check_cancelled(ctx)
             next_cancel_check = loop.time() + 1.0
  
         if deadline is not None:
@@ -172,7 +188,7 @@ async def _run(ctx: ActionContext) -> None:
     try:
         await _wait_until_loaded(ctx, process, connection)
         for i, page in enumerate(action_input.pages, start=1):
-            await ctx.check_cancelled()
+            await _check_cancelled(ctx)
             
             if restart_needed:
                 logger.info(f'[{i}/{total}] Restarting worker after timeout')
@@ -248,7 +264,7 @@ async def _run(ctx: ActionContext) -> None:
         logger.info(message)
         await ctx.complete(message=message)
     
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, ActionCancelled):
         logger.info('Action cancelled')
         raise
  
