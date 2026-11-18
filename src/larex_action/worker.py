@@ -19,17 +19,17 @@ class WorkerRequest:
 
 
 @dataclass
-class WorkerStatus:
-    """ Status message from the worker """
-    type: Literal['loaded', 'error']
-    message: str | None = None
-
-
-@dataclass
 class WorkerResponse:
     """ Worker outputs on success """
     # TEMPLATE: Add or change fields for action outputs. Example:
     # xml: bytes
+
+
+@dataclass
+class WorkerStatus:
+    """ Status message from the worker """
+    type: Literal['loaded', 'error']
+    message: str | None = None
 
 
 # TEMPLATE: accept passes parameters. Example:

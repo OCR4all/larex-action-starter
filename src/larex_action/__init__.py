@@ -1,6 +1,4 @@
 # SPDX-License-Identifier: MIT
-from __future__ import annotations
-
 import logging
 
 from larex_actions.fastapi import create_larex_action_app
