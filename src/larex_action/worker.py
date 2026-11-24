@@ -32,12 +32,22 @@ class WorkerStatus:
     message: str | None = None
 
 
+def _send(connection: Connection, message: object) -> bool:
+    """ Send a message to the parent. Returns False if the parent is gone. """
+    try:
+        connection.send(message)
+    except OSError:
+        logger.warning(f'Could not send {type(message).__name__} to parent')
+        return False
+    return True
+
+
 # TEMPLATE: accept passes parameters. Example:
 # def worker(connection: Connection, model: Path) -> None:
-def worker(connection: Connection) -> None:
+def worker(connection: Connection, ) -> None:
     """
     Process-isolated action worker.
- 
+
     Protocol:
     1. Send exactly one `WorkerStatus` after startup: 'loaded', or 'error' followed by exit if loading failed.
     2. For every request (`request = connection.recv()`), send exactly one `WorkerResponse`
@@ -45,52 +55,47 @@ def worker(connection: Connection) -> None:
     3. Exit when `None` is received or the parent closes the pipe.
     """
     logger.debug('Initialize worker')
-    
-    try:
-        # TEMPLATE: import and initialize models here. Example:
-        # import cv2
-        # from my_model import Model
-        # m = Model(model)
-        
-        connection.send(WorkerStatus('loaded'))
-    except Exception as exc:
-        logger.exception('Failed to load worker')
-        try:
-            connection.send(WorkerStatus('error', f'{type(exc).__name__} {exc}'))
-        except (BrokenPipeError, EOFError, OSError):
-            logger.warning('Could not send load failure to parent')
-        connection.close()
-        return
-    
-    while True:
-        try:
-            request = connection.recv()
-        except EOFError:
-            logger.debug('Parent closed pipe; shutting down worker')
-            break
-        if request is None:
-            logger.debug('Parent sent shutdown signal; shutting down worker')
-            break   
-        if not isinstance(request, WorkerRequest):
-            logger.error(f'Received unexpected request: {type(request).__name__}')
-            continue
 
+    with connection:
         try:
-            # TEMPLATE: process pages here. Example:
-            # image = cv2.imdecode(np.frombuffer(request.image, np.uint8), cv2.IMREAD_GRAYSCALE)
-            # ...
-            
-            # TEMPLATE: send results with the WorkerResponse dataclass. Example:
-            # connection.send(WorkerResponse(image))
-            connection.send(WorkerResponse())
-
+            # TEMPLATE: import and initialize models here. Example:
+            # import cv2
+            # from my_model import Model
+            # m = Model(model)
+            pass
         except Exception as exc:
-            logger.exception('Failed to process element')
+            logger.exception('Failed to load worker')
+            _send(connection, WorkerStatus('error', f'{type(exc).__name__} {exc}'))
+            return
+
+        if not _send(connection, WorkerStatus('loaded')):
+            return
+
+        while True:
             try:
-                connection.send(WorkerStatus('error', f'{type(exc).__name__} {exc}'))
-            except (BrokenPipeError, EOFError, OSError):
-                logger.warning('Could not send worker failure to parent')
+                request = connection.recv()
+            except (EOFError, OSError):
+                logger.debug('Parent closed pipe; shutting down worker')
+                break
+            if request is None:
+                logger.debug('Parent sent shutdown signal; shutting down worker')
                 break
 
-    connection.close()
+            try:
+                if not isinstance(request, WorkerRequest):
+                    raise TypeError(f'Unexpected request: {type(request).__name__}')
+
+                # TEMPLATE: process pages here. Example:
+                # image = cv2.imdecode(np.frombuffer(request.image, np.uint8), cv2.IMREAD_GRAYSCALE)
+                # ...
+
+                # TEMPLATE: send results with the WorkerResponse dataclass. Example:
+                # connection.send(WorkerResponse(image))
+                connection.send(WorkerResponse())
+
+            except Exception as exc:
+                logger.exception('Failed to process element')
+                if not _send(connection, WorkerStatus('error', f'{type(exc).__name__} {exc}')):
+                    break
+
     logger.info('Worker stopped successfully')

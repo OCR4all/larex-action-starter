@@ -117,7 +117,7 @@ Example:
 
 ```python
 # runner.py
-model = action_input.parameters.get('Model', None)
+model = action_input.parameters.get('Model', 'default')
 ```
 
 If you need to pass a parameter to the worker, you have to pass the value as a process argument:
@@ -134,7 +134,7 @@ Additionally, the worker function needs to accept the argument, for example:
 
 ```python
 # worker.py
-def work(connection: Connection, model: Path) -> None:
+def worker(connection: Connection, model: Path) -> None:
     ...
 ```
 
